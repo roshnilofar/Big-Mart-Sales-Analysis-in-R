@@ -1,0 +1,122 @@
+---
+title: "Big Mart Sales Copy"
+author: "Roshan Nilofar Iqbal"
+date: "7/12/2020"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(xgboost)
+library(caret)
+library(cowplot)
+library(ranger)
+library(outliers)
+```
+
+```{r}
+setwd('C:/Users/Iqbal/Documents/Rprog/big-mart-sales')
+
+train = fread("train.csv") 
+test = fread("test.csv ") 
+submission = fread("ss.csv")
+
+
+test[,Item_Outlet_Sales := NA]
+
+```
+
+# Removing Outliers
+
+```{r}
+#train <- train[(Item_Outlet_Sales < quantile(combi$Item_Outlet_Sales, 0.99, na.rm = TRUE)), ]
+
+train[ Item_Outlet_Sales > quantile(train$Item_Outlet_Sales, 0.99, na.rm = TRUE), .N ]
+
+
+#Remove unwanted rows in data.table
+train <- train[ Item_Outlet_Sales < quantile(train$Item_Outlet_Sales, 0.99, na.rm = TRUE) ]
+```
+
+
+# Right skewed data log transform
+
+```{r}
+" TRIAL WORKS
+
+train[,Item_Outlet_Sales_log_transform := log(Item_Outlet_Sales + 1)]
+train[,Item_Outlet_Sales_exp_transform := exp(Item_Outlet_Sales_log_transform) - 1]
+
+"
+
+train[,Item_Outlet_Sales := log(Item_Outlet_Sales + 1)]
+
+```
+
+
+# Normalization --- NOT NEEDED 
+
+```{r}
+
+m <- mean(train$Item_Outlet_Sales,na.rm = TRUE)
+sdval <- sd(train$Item_Outlet_Sales,na.rm = TRUE)
+
+train[,Item_Outlet_Sales_manual := (Item_Outlet_Sales - m)/sdval]
+train[,Item_Outlet_Sales_scaled := scale(Item_Outlet_Sales,center = TRUE,scale=TRUE)]
+
+
+train[is.na(Item_Outlet_Sales),.N]
+```
+
+# Combining Test and Train
+```{r}
+combi = rbind(train, test)
+```
+
+
+```{r}
+ggplot(combi) + geom_histogram(aes(Item_Outlet_Sales), bins = 50, color="black", fill="coral1")
+#ggplot(as.dataframe(sample)) + geom_histogram(aes(sample), bins = 50, color="black", fill="coral1")
+```
+
+
+# Normalization ------- Not needed ---- DO NOT EXECUTE
+
+
+
+```{r}
+combi$Item_Outlet_Sales <- (combi$Item_Outlet_Sales - mean(combi$Item_Outlet_Sales))/ sd(combi$Item_Outlet_Sales)
+```
+
+
+
+```{r}
+num_vars = which(sapply(combi, is.numeric)) # index of numeric features 
+num_vars_names = names(num_vars) 
+```
+
+```{r}
+combi_numeric = combi[,setdiff(num_vars_names, "Item_Outlet_Sales"), with = F] 
+prep_num = preProcess(combi_numeric, method=c("center", "scale")) 
+combi_numeric_norm = predict(prep_num, combi_numeric)
+
+
+combi[,setdiff(num_vars_names, "Item_Outlet_Sales") := NULL] # removing numeric independent variables 
+combi = cbind(combi, combi_numeric_norm)
+```
+
+
+```{r}
+combi$Item_Outlet_Sales = log(combi$Item_Outlet_Sales+1)
+```
+
+
+```{r}
+#combi <- combi[(Item_Outlet_Sales < quantile(combi$Item_Outlet_Sales, 0.99, na.rm = TRUE)), ]
+tail(combi$Item_Outlet_Sales)
+```
+
+

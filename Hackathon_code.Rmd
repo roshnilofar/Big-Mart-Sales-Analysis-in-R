@@ -1,0 +1,695 @@
+---
+title: "Big Mart Sales Prediction"
+output: html_document
+---
+
+## Loading Dependencies
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(xgboost)
+library(caret)
+library(cowplot)
+library(ranger)
+library(outliers)
+```
+
+## Loading Datasets
+
+```{r}
+getwd()=='C:/Users/Iqbal/Documents/Rprog/big-mart-sales'
+train = fread("train.csv") 
+test = fread("test.csv ") 
+submission = fread("ss.csv")
+```
+
+## Structure of Dataset
+
+```{r}
+dim(train)
+dim(test)
+dim(submission)
+```
+
+```{r}
+"
+str(train)
+str(test)
+str(submission)
+
+summary(train)
+summary(test)
+summary(submission)
+
+names(train)
+names(test)
+names(submission)
+
+"
+```
+
+## Removing Outliers from Target Variable --- not gud
+```{r}
+"
+train[ Item_Outlet_Sales > quantile(combi$Item_Outlet_Sales, 0.99, na.rm = TRUE), .N ]
+
+
+#Remove unwanted rows in data.table
+train <- train[ Item_Outlet_Sales < quantile(train$Item_Outlet_Sales, 0.99, na.rm = TRUE) ]
+"
+```
+
+## Combining train and test
+```{r}
+#train[,"Outlet_Identifier"]
+
+test[,Item_Outlet_Sales := NA] 
+combi = rbind(train, test) # combining train and test datasets dim(combi)
+dim(combi)
+
+```
+
+
+## Unique Outlets and Items
+
+```{r}
+
+"
+combi$Outlet_Identifier <- as.factor(combi$Outlet_Identifier)
+levels(combi$Outlet_Identifier)
+
+combi$Item_Identifier <- as.factor(combi$Item_Identifier)
+nlevels(combi$Item_Identifier)
+"
+print(head(unique(combi$Item_Identifier)))
+length(unique(combi$Item_Identifier))
+is.factor(combi$Item_Identifier) 
+
+print(unique(combi$Outlet_Identifier))
+is.factor(combi$Outlet_Identifier) 
+```
+
+## Types of Items
+
+```{r}
+"
+combi$Item_Type <- as.factor(combi$Item_Type)
+levels(combi$Item_Type)
+
+nlevels(combi$Item_Type) 
+"
+print(unique(combi$Item_Type))
+is.factor(combi$Item_Type) 
+```
+
+## Types of Outlets
+
+```{r}
+print(unique(combi$Outlet_Type))
+is.factor(combi$Outlet_Type)           
+```
+
+## Types of Outlet Location
+```{r}
+print(unique(combi$Outlet_Location_Type))
+is.factor(combi$Outlet_Location_Type)
+```
+
+## Types of Outlet Size
+```{r}
+print(unique(combi$Outlet_Size))
+is.factor(combi$Outlet_Size)
+```
+
+## Types of Fat Content
+
+```{r}
+print(unique(combi$Item_Fat_Content))
+is.factor(combi$Item_Fat_Content)
+
+```
+
+
+## Feature Separation based on type of Data
+
+  * Categorical Attributes - Freq dist table, bar charts, pie charts, paretto diagrams
+  
+    + Nominal
+      - Item_Identifier
+      - Item_Type
+      - Outlet_Identifier
+      
+    + Ordinal
+      - Item_Fat_Content
+      - Outlet_Size
+      - Outlet_Location_Type
+      - Outlet_Type
+      
+      
+  * Numerical Attributes
+  
+    + Discrete 
+      - nlevels of Factor Variables
+      - Outlet_Establishment_Year
+      
+    + Continuous
+      - Item_Weight
+      - Item_Visibility
+      - Item_MRP
+      - Item_Outlet_Sales
+
+## Feature separation based on measurement levels
+  
+  * Qualitative -- similar to categorical data
+    
+  * Quantitative
+  
+    + Interval
+      - Item_Weight
+      - Item_Visibility
+      - Item_MRP
+      - Item_Outlet_Sales
+      
+    + Ratios
+      - none
+
+## Removing Dulpicates from Fat Content
+
+```{r}
+"
+combi[Item_Fat_Content== low fat,Item_Fat_Content:=Low Fat]
+combi[Item_Fat_Content== LF,Item_Fat_Content:=Low Fat]
+combi[combi$Item_Fat_Content==reg,Item_Fat_Content:=Regular]
+
+combi[combi$Item_Fat_Content== low fat]:=Low Fat
+combi[combi$Item_Fat_Content==LF]:=Low Fat
+combi[combi$Item_Fat_Content==reg]:=Regular
+"
+combi$Item_Fat_Content[combi$Item_Fat_Content == "LF"] = "Low Fat"
+combi$Item_Fat_Content[combi$Item_Fat_Content == "low fat"] = "Low Fat"
+combi$Item_Fat_Content[combi$Item_Fat_Content == "reg"] = "Regular"
+##sample <- combi %>% group_by(Item_Fat_Content,Item_Type) %>% summarise(Count = n(), Item_mean_MRP = mean(Item_MRP))
+
+
+ggplot(combi %>% group_by(Item_Fat_Content) %>% summarise(Count = n())) +   geom_bar(aes(Item_Fat_Content, Count), stat = "identity", fill = "coral1")
+```
+
+
+## Univariate Analysis
+
+```{r}
+ggplot(combi, aes(Outlet_Type,Outlet_Size,fill=Outlet_Type)) +
+    geom_bar(stat = "identity", position= position_dodge())
+
+
+```
+
+```{r}
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Outlet_Sales), binwidth=100, color= "black", fill="orange") +
+    xlab("Item Outlet Sales")
+
+
+```
+```{r}
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_MRP), binwidth=1, color= "black", fill="orange") +
+    xlab("Item MRP")
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Weight), binwidth=0.05, color= "black", fill="orange") +
+    xlab("Item Weight")
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Visibility), binwidth=0.005, color= "black", fill="orange") +
+    xlab("Item Visibility")
+
+
+```
+
+
+
+```{r}
+ggplot(combi %>% dplyr::group_by(Item_Fat_Content) %>% dplyr::summarise(Count = n())) +   
+      geom_bar(aes(Item_Fat_Content, Count), stat = "identity", fill = "blue")
+
+ggplot(combi %>% dplyr::group_by(Item_Identifier) %>% dplyr::summarise(Count = n()) %>% arrange(desc(Count))) +
+      geom_bar(aes(Item_Identifier, Count), stat = "identity", fill = "blue") +
+      geom_label(aes(Item_Identifier, Count, label = Count), vjust = 0.5)+
+      theme(axis.text.x = element_text(angle = 90, hjust=1)) + xlab("Item Identifier")
+
+df <- combi %>% dplyr::group_by(Item_Type) %>% dplyr::summarise(Count = n())
+ggplot(df) + 
+      geom_bar(aes(Item_Type, Count), stat = "identity",position=position_dodge(), fill = "blue")+
+      geom_label(aes(Item_Type, Count, label = Count), vjust = 0.5)+
+      theme(axis.text.x = element_text(angle = 60, hjust=1)) + xlab("Item Type")
+
+ggplot(combi %>% dplyr::group_by(Outlet_Type) %>% dplyr::summarise(Count = n())) + 
+      geom_bar(aes(Outlet_Type, Count), stat = "identity", fill = "blue")+
+      geom_label(aes(Outlet_Type, Count, label = Count), vjust = 0.5)
+
+ggplot(combi %>% dplyr::group_by(Outlet_Identifier) %>% dplyr::summarise(Count = n())) +   
+      geom_bar(aes(Outlet_Identifier, Count), stat = "identity", fill = "blue")+
+      geom_label(aes(Outlet_Identifier, Count, label = Count), vjust = 0.5)
+
+ggplot(combi %>% dplyr::group_by(Outlet_Size) %>% dplyr::summarise(Count = n()) %>% dplyr::arrange(desc(Count))) +   
+      geom_bar(aes(Outlet_Size, Count), stat = "identity", fill = "blue")+
+      geom_label(aes(Outlet_Size, Count, label = Count), vjust = 0.5)
+
+ggplot(combi %>% dplyr::group_by(Outlet_Establishment_Year) %>% dplyr::summarise(Count = n())) + 
+      geom_bar(aes(factor(Outlet_Establishment_Year), Count), stat = "identity", fill = "blue")+
+      geom_label(aes(factor(Outlet_Establishment_Year), Count, label = Count), vjust = 0.5)+  
+      xlab("Outlet_Establishment_Year") +  
+      theme(axis.text.x = element_text(size = 8.5))
+
+
+```
+
+## Imputing Missing Values
+```{r}
+colSums(is.na(combi))
+```
+
+### Removing NA from Item_Weight
+
+```{r}
+missing_vals <- which(is.na(combi$Item_Weight))
+
+
+for(i in missing_vals){
+  item = combi$Item_Identifier[i]  
+  combi$Item_Weight[i] = mean(combi$Item_Weight[combi$Item_Identifier == item], na.rm = T) }
+
+```
+
+
+### Removing NA from Item_Visibility
+
+```{r}
+missing_vals <- which(is.na(combi$Item_Visibility))
+
+
+for(i in missing_vals){
+  item = combi$Item_Identifier[i]  
+  combi$Item_Visibility[i] = mean(combi$Item_Visibility[combi$Item_Identifier == item], na.rm = T) }
+
+```
+
+## Bivariate Analysis
+```{r}
+  # Item_Weight vs Item_Outlet_Sales 
+ggplot(combi) +      
+     geom_point(aes(Item_Weight, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +     
+     theme(axis.title = element_text(size = 8.5))
+# Item_Visibility vs Item_Outlet_Sales 
+ggplot(combi) +       
+      geom_point(aes(Item_Visibility, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +      
+      theme(axis.title = element_text(size = 8.5))
+# Item_MRP vs Item_Outlet_Sales 
+ggplot(combi) +       
+      geom_point(aes(Item_MRP, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +      
+      theme(axis.title = element_text(size = 8.5))
+
+```
+
+```{r}
+# Item_Type vs Item_Outlet_Sales 
+ggplot(combi) +       
+  geom_violin(aes(Item_Type, Item_Outlet_Sales), fill = "magenta") +      
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),axis.text = element_text(size = 6),axis.title = element_text(size= 8.5))
+# Item_Fat_Content vs Item_Outlet_Sales 
+ggplot(combi) + 
+  geom_violin(aes(Item_Fat_Content, Item_Outlet_Sales), fill = "magenta") +      
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),axis.text = element_text(size = 8),axis.title = element_text(size= 8.5))
+# Outlet_Identifier vs Item_Outlet_Sales 
+ggplot(combi) + 
+  geom_violin(aes(Outlet_Identifier, Item_Outlet_Sales), fill = "magenta") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),axis.text = element_text(size = 8),axis.title = element_text(size= 8.5))
+
+```
+
+```{r}
+
+ggplot(combi) + geom_violin(aes(Outlet_Location_Type, Item_Outlet_Sales), fill = "magenta") 
+ggplot(combi) + geom_violin(aes(Outlet_Type, Item_Outlet_Sales), fill = "magenta") 
+
+
+ggplot(combi) + geom_violin(aes(Outlet_Size, Item_Outlet_Sales), fill = "magenta")
+
+```
+
+## Feature Engineering
+
+*Item_Type_new: Broader categories for the variable Item_Type.
+*Item_category: Categorical variable derived from Item_Identifier.
+*Outlet_Years: Years of operation for outlets.
+*price_per_unit_wt: Item_MRP/Item_Weight
+*Item_MRP_clusters: Binned feature for Item_MRP.
+
+```{r}
+perishable = c("Breads", "Breakfast", "Dairy", "Fruits and Vegetables", "Meat", "Seafood")
+non_perishable = c("Baking Goods", "Canned", "Frozen Foods", "Hard Drinks", "Health and Hygiene", "Household", "Soft Drinks")
+
+# create a new feature 'Item_Type_new' 
+combi[,Item_Type_new := ifelse(Item_Type %in% perishable, "perishable", ifelse(Item_Type %in% non_perishable, "non_perishable", "not_sure"))]
+
+```
+
+Let’s compare Item_Type with the first 2 characters of Item_Identifier, i.e., ‘DR’, ‘FD’, and ‘NC’. These identifiers most probably stand for drinks, food, and non-consumable.
+
+```{r}
+table(combi$Item_Type, substr(combi$Item_Identifier, 1, 2))
+combi[,Item_category := substr(combi$Item_Identifier, 1, 2)]
+combi$Item_Fat_Content[combi$Item_category == "NC"] = "Non-Edible"
+```
+
+```{r}
+# years of operation for outlets 
+combi[,Outlet_Years := 2013 - Outlet_Establishment_Year] 
+combi$Outlet_Establishment_Year = as.factor(combi$Outlet_Establishment_Year)
+
+# Price per unit weight 
+combi[,price_per_unit_wt := Item_MRP/Item_Weight]
+
+combi[,Item_MRP_clusters := ifelse(Item_MRP < 69, "1st",ifelse(Item_MRP >= 69 & Item_MRP < 136, "2nd",ifelse(Item_MRP >= 136 & Item_MRP < 203, "3rd", "4th")))]
+```
+
+
+## Encoding Categorical Variables
+
+```{r}
+combi[,Outlet_Size_num := ifelse(Outlet_Size == "Small", 0,ifelse(Outlet_Size == "Medium", 1, 2))] 
+
+combi[,Outlet_Location_Type_num := ifelse(Outlet_Location_Type == "Tier 3", 0,ifelse(Outlet_Location_Type == "Tier 2", 1, 2))]
+
+combi[, c("Outlet_Size", "Outlet_Location_Type") := NULL]
+
+```
+
+```{r}
+
+# One hot encoding for categorical variables
+ohe = dummyVars("~.", data = combi[,-c("Item_Identifier", "Outlet_Establishment_Year", "Item_Type")], fullRank = T) 
+ohe
+summary(ohe)
+
+```
+
+```{r}
+ohe_df = data.table(predict(ohe, combi[,-c("Item_Identifier", "Outlet_Establishment_Year", "Item_Type")])) 
+```
+
+```{r}
+combi = cbind(combi[,"Item_Identifier"], ohe_df)
+```
+
+## Preprocessing
+
+```{r}
+
+#Skewed Variables
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$price_per_unit_wt), binwidth=0.1, color= "black", fill="orange") +
+    xlab("Item price_per_unit_wt")
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Visibility), binwidth=0.005, color= "black", fill="orange") +
+    xlab("Item Visibility")
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Outlet_Sales), binwidth=0.05, color= "black", fill="orange") +
+    xlab("Item Outlet Sales")
+
+
+```
+
+### Removing Skewness
+```{r}
+combi[,Item_Visibility := log(Item_Visibility + 1)] # log + 1 to avoid division by zero
+combi[,price_per_unit_wt := log(price_per_unit_wt + 1)]
+```
+### Performing Log transform on Target Variable
+
+```{r}
+" TRIAL WORKS
+
+train[,Item_Outlet_Sales_log_transform := log(Item_Outlet_Sales + 1)]
+train[,Item_Outlet_Sales_exp_transform := exp(Item_Outlet_Sales_log_transform) - 1]
+
+"
+
+combi[,Item_Outlet_Sales := log(Item_Outlet_Sales + 1)]
+
+```
+
+### Normalization
+```{r}
+num_vars = which(sapply(combi, is.numeric)) # index of numeric features 
+num_vars_names = names(num_vars) 
+```
+
+```{r}
+combi_numeric = combi[,setdiff(num_vars_names, "Item_Outlet_Sales"), with = F] 
+
+
+prep_num = preProcess(combi_numeric, method=c("center", "scale")) 
+combi_numeric_norm = predict(prep_num, combi_numeric)
+
+
+combi[,setdiff(num_vars_names, "Item_Outlet_Sales") := NULL] # removing numeric independent variables 
+combi = cbind(combi, combi_numeric_norm)
+```
+
+```{r}
+
+#Skewed Variables
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$price_per_unit_wt), binwidth=0.1, color= "black", fill="orange") +
+    xlab("Item price_per_unit_wt")
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Visibility), binwidth=0.005, color= "black", fill="orange") +
+    xlab("Item Visibility")
+
+ggplot(combi) + 
+    geom_histogram(aes(combi$Item_Outlet_Sales), binwidth=0.05, color= "black", fill="orange") +
+    xlab("Item Outlet Sales")
+
+
+```
+
+# Data Splitting to Test and Train
+```{r}
+train = combi[1:nrow(train)] 
+test = combi[(nrow(train) + 1):nrow(combi)] 
+test[,Item_Outlet_Sales := NULL] # removing Item_Outlet_Sales as it contains only NA for test dataset
+
+```
+
+# Correlation
+```{r}
+cor_train = cor(train[,-c("Item_Identifier")]) 
+corrplot(cor_train, method = "pie", type = "lower", tl.cex = 0.9)
+```
+
+## Model Building
+
+```{r}
+linear_reg_mod = lm(Item_Outlet_Sales ~ ., data = train[,-c("Item_Identifier")])
+```
+
+```{r}
+dim(submission)
+names(submission)
+head(submission)
+head(test)
+```
+```{r}
+# preparing dataframe for submission and writing it in a csv file 
+submission$Item_Outlet_Sales = predict(linear_reg_mod, test[,-c("Item_Identifier")])
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+```
+
+```{r}
+# Define training control
+set.seed(100) 
+train.Control <- trainControl(method = "cv", number = 10)
+# Train the model
+model <- train(Item_Outlet_Sales ~ ., data = train[,-c("Item_Identifier")],
+               method = "lm",
+               trControl = train.Control)
+```
+
+```{r}
+# Summarize the results
+print(linear_reg_mod)
+#plot(varImp(linear_reg_mod))
+print(model)
+```
+
+```{r}
+# preparing dataframe for submission and writing it in a csv file 
+submission$Item_Outlet_Sales = predict(model, test[,-c("Item_Identifier")])
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+```
+
+## Lasso Regression
+
+```{r}
+
+set.seed(101) 
+#my_control = trainControl(method="cv", number=5) 
+Grid = expand.grid(alpha = 1, lambda = seq(0.001,0.1,by = 0.0002)) 
+lasso_linear_reg_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")],
+                             y = train$Item_Outlet_Sales,
+                             method='glmnet', 
+                             trControl= train.Control, 
+                             tuneGrid = Grid)
+```
+
+
+```{r}
+# preparing dataframe for submission and writing it in a csv file 
+submission$Item_Outlet_Sales = predict(lasso_linear_reg_mod, test[,-c("Item_Identifier")])
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+```
+
+## Ridge Regression
+
+```{r}
+set.seed(102) 
+#my_control = trainControl(method="cv", number=5) 
+Grid = expand.grid(alpha = 0, lambda = seq(0.001,0.1,by = 0.0002)) 
+ridge_linear_reg_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")],
+                             y = train$Item_Outlet_Sales,
+                             method='glmnet', 
+                             trControl= train.Control,
+                             tuneGrid = Grid)
+```
+
+```{r}
+# preparing dataframe for submission and writing it in a csv file 
+submission$Item_Outlet_Sales = predict(ridge_linear_reg_mod, test[,-c("Item_Identifier")])
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+```
+
+## Random Forrest
+
+```{r}
+set.seed(1237)
+my_control = trainControl(method="cv", number=5) 
+```
+
+```{r}
+tgrid = expand.grid(
+  .mtry = c(3:10),
+  .splitrule = "variance",
+  .min.node.size = c(10,15,20)
+)
+
+rf_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")], 
+               y = train$Item_Outlet_Sales,
+               method='ranger', 
+               trControl= my_control, 
+               tuneGrid = tgrid,
+               num.trees = 400,
+               importance = "permutation")
+
+```
+
+```{r}
+plot(rf_mod)
+plot(varImp(rf_mod))
+```
+
+```{r}
+# preparing dataframe for submission and writing it in a csv file 
+submission$Item_Outlet_Sales = predict(rf_mod, test[,-c("Item_Identifier")])
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+```
+
+
+## Xgboost Model
+
+```{r}
+param_list = list(
+        objective = "reg:linear",
+        eta=0.01,
+        gamma = 1,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.5
+        )
+```
+
+
+```{r}
+dtrain = xgb.DMatrix(data = as.matrix(train[,-c("Item_Identifier", "Item_Outlet_Sales")]),                          label= train$Item_Outlet_Sales)
+
+dtest = xgb.DMatrix(data = as.matrix(test[,-c("Item_Identifier")]))
+```
+
+```{r}
+set.seed(112)
+ 
+xgbcv = xgb.cv(params = param_list, 
+               data = dtrain, 
+               nrounds = 1000, 
+               nfold = 5, 
+               print_every_n = 10, 
+               early_stopping_rounds = 30, 
+               maximize = F)
+```
+
+```{r}
+xgb_model = xgb.train(data = dtrain, params = param_list, nrounds = 653)
+```
+
+```{r}
+submission
+submission$Item_Outlet_Sales <- exp(predict(xgb_model, data.matrix(test[,-c("Item_Identifier")])))-1
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+```
+
+```{r}
+write.csv(submission, "XGBoost_pred.csv", row.names = F)
+```
+
+
+## Variable Importance
+
+```{r}
+var_imp = xgb.importance(feature_names = setdiff(names(train), 
+                                        c("Item_Identifier", "Item_Outlet_Sales")), 
+                                        model = xgb_model)
+xgb.plot.importance(var_imp)
+```
+
+## Weighted Average Ensembling
+
+```{r}
+linear <- predict(linear_reg_mod, test[,-c("Item_Identifier")])
+K_fold <- predict(model, test[,-c("Item_Identifier")])
+Lasso_reg <- predict(lasso_linear_reg_mod, test[,-c("Item_Identifier")])
+Ridge_reg <- predict(ridge_linear_reg_mod, test[,-c("Item_Identifier")])
+Random_Forest <- predict(rf_mod, test[,-c("Item_Identifier")])
+XGBoost <- predict(xgb_model, data.matrix(test[,-c("Item_Identifier")]))
+
+submission$Item_Outlet_Sales = (linear*0.05)+ (XGBoost*0.6) + (Random_Forest*0.25) + (Lasso_reg*0.05) + (Ridge_reg*0.05)
+
+submission$Item_Outlet_Sales = exp(submission$Item_Outlet_Sales)-1
+
+submission$Item_Outlet_Sales[submission$Item_Outlet_Sales<0]=0
+
+write.csv(submission, "Weighted_Average.csv", row.names = F)
+        
+```
